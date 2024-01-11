@@ -87,17 +87,17 @@ long long int _error_count = 0;
 volatile sig_atomic_t sigint_received = 0;
 void sigint_handler(int s)
 {
-	sigint_received += 1;
-
-	//if it hangs in the loop or afterwards, this one gives the opportunity to stop right away
-	if (sigint_received > 3) {
-		exit(-1);
-	}
+  sigint_received += 1;
+  if (sigint_received > 3) {
+	exit(-1);
+  }
 }
 
 static void exit_handler(void)
 {
+	//FIXME This part is NEVER reached when stopping an endless run (i.e. no -r, no -o set) with SIGINT ?
 	printf("Exit handler: Cleaning up ...\n");
+//	set_modem_lines(_fd, 0, TIOCM_LOOP); // TODO if do it here, move def!!
 	tcflush(_fd, TCIOFLUSH);
 
 	if (_fd >= 0) {
@@ -324,7 +324,7 @@ static void display_help(void)
 			"  -n, --no-icount          Do not request driver for counts of input serial line interrupts (TIOCGICOUNT)\n"
 			"  -f, --flush-buffers      Flush RX and TX buffers before starting\n"
 			"\n"
-		);
+	      );
 }
 
 static void process_options(int argc, char * argv[])
@@ -533,44 +533,34 @@ static unsigned char next_count_value(unsigned char c)
 static void process_read_data(void)
 {
 	unsigned char rb[1024];
-	int actual_read_count = 0;
-	while (actual_read_count < 1024) {
-		int c = read(_fd, &rb, sizeof(rb));
-		if (c > 0) {
-			if (_cl_rx_dump) {
-				if (_cl_rx_dump_ascii)
-					dump_data_ascii(rb, c);
-				else
-					dump_data(rb, c);
-			}
-
-			// verify read count is incrementing
-			int i;
-			for (i = 0; i < c; i++) {
-				if (rb[i] != _read_count_value) {
-					if (_cl_dump_err) {
-						printf("Error, count: %lld, expected %02x, got %02x c %x\n",
-							_read_count + i, _read_count_value, rb[i], c);
-					}
-					_error_count++;
-					if (_cl_stop_on_error) {
-						dump_serial_port_stats();
-						exit(-EIO);
-					}
-					_read_count_value = rb[i];
-				}
-				_read_count_value = next_count_value(_read_count_value);
-			}
-			_read_count += c;
-			actual_read_count += c;
-		} else if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-			perror("read failed");
-			continue; // Retry the read
-		} else {
-		    break;
+	int c = read(_fd, &rb, sizeof(rb));
+	if (c > 0) {
+		if (_cl_rx_dump) {
+			if (_cl_rx_dump_ascii)
+				dump_data_ascii(rb, c);
+			else
+				dump_data(rb, c);
 		}
+
+		// verify read count is incrementing
+		int i;
+		for (i = 0; i < c; i++) {
+			if (rb[i] != _read_count_value) {
+				if (_cl_dump_err) {
+					printf("Error, count: %lld, expected %02x, got %02x c %x\n",
+							_read_count + i, _read_count_value, rb[i], c);
+				}
+				_error_count++;
+				if (_cl_stop_on_error) {
+					dump_serial_port_stats();
+					exit(-EIO);
+				}
+				_read_count_value = rb[i];
+			}
+			_read_count_value = next_count_value(_read_count_value);
+		}
+		_read_count += c;
 	}
-	printf("Read %d bytes\n", actual_read_count);
 }
 
 static void process_write_data(void)
@@ -749,7 +739,7 @@ int main(int argc, char * argv[])
 
 	signal(SIGINT, sigint_handler);
 	signal(SIGTERM, sigint_handler);
-	atexit(&exit_handler); //does not work for SIGINT/SIGTERM without the previous signal handlers
+	atexit(&exit_handler); //FIXME seems not to work for SIGINT without further additions like the previous signal handler
 
 	process_options(argc, argv);
 
@@ -950,7 +940,7 @@ int main(int argc, char * argv[])
 
 		if (_cl_tx_time && !_cl_tx_wait) {
 			if (current.tv_sec - start_time.tv_sec >= wait_time &&
-				current.tv_sec - start_time.tv_sec - wait_time >= _cl_tx_time ) {
+			    current.tv_sec - start_time.tv_sec - wait_time >= _cl_tx_time ) {
 				_cl_tx_time = 0;
 				_cl_no_tx = 1;
 				serial_poll.events &= ~POLLOUT;
@@ -968,10 +958,12 @@ int main(int argc, char * argv[])
 		}
 	}
 
+	//FIXME rs485 RTS not reset on SIGINT as this part is also NEVER reached (like exit_handler)?!
 	printf("Terminating ...\n");
 	tcdrain(_fd);
 	dump_serial_port_stats();
-	set_modem_lines(_fd, 0, TIOCM_LOOP); //seems not to be relevant for RTS reset
+	set_modem_lines(_fd, 0, TIOCM_LOOP); //TODO undecided
+	// tcflush(_fd, TCIOFLUSH); //move to exit_handler
 
 	return compute_error_count();
 }
